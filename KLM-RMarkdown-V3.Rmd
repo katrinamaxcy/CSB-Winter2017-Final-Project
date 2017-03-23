@@ -1,0 +1,197 @@
+---
+title: "Final Project"
+author: "Katrina Lee Maxcy"
+date: "3/21/2017"
+output: pdf_document
+---
+## Project Outline
+Acute myeloid leukemia (AML) is a clinically devastating cancer (<30% 5 year-survival rate) that has been extraordinarily difficult to treat due to its complex genetic subtypes. One shared hallmark of AML is the arrest of leukemic myeloblasts at an immature and self-renewing stage of development.  Therapies that are able to overcome this arrest represent a powerful treatment strategy. Sykes et al developed a cellular model of HoxA9-enforced myeloid differentiation arrest to use in an unbiased phenotypic flow-cytometry based screen. In this system, 96-well and 384-well plates are treated with titrated small compounds in order to assess viability, changes in cellular phenotype (based on cell surface markers), and differentiation status (ie: are the cells able to overcome their differentiation arrest to take on a neutrophil phenotype versus a myeloblast progenitor phenotype). Compounds that allow for differentiation are considered "hits" in this system and should be further studied to identify details on mechanism of action and pharmacokinetics. Developing code to analyze the output (over 330,000 compounds will need to be tested at multiple doses) will be essential for quickly identifying these "hits".
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if(!require(tidyverse)){
+  install.packages('tidyverse')
+  require(tidyverse)
+}
+```
+
+## Import File 
+Import Excel file for analysis. The goal will be to set up a platform to analyze flow cytometry data from 96-well and 384-well plates for cell viability (determine whether compounds are overly toxic) and cell surface markers (determine changes in differentiation status) caused by treatment with small compounds. For the purposes of this project, a sample set of 96-well plates will be used in order to make it easier to confirm whether the program is working appropriately. Since the column names will be standardized, importing a 384-well plate will work in this pipeline as well.
+
+``` {r echo=FALSE}
+# Import sample viability data (96-well plate)
+viability <- read.csv ("~/Desktop/R Final Project/R Test Viability 1.csv",
+                       header = TRUE, stringsAsFactors = TRUE)
+```
+
+## Determine Viability Normalized to Control
+Calculate percent viability normalized to an average of the DMSO  control wells.
+
+``` {r echo = FALSE}
+# Calculate average of DMSO control wells
+DMSO_Average <- with(viability, sum(DMSO) / 8)
+
+# Create new data table (% viability normalized to DMSO control wells)
+normviability <- viability[2:13] / DMSO_Average * 100
+round(normviability, digits = 2)
+
+# Copy "Concentration" column from viability data table and append to norm_viability data table
+normviability$Concentration <- viability[, "Concentration..uM."]
+
+# Remove "Concentration"" column from viability data table
+viability[, "Concentration..uM."] <- NULL
+```
+
+## Viability Curves
+Create viability curves that show percentage of live cells vs. dose of compound cells are treated with. This will give a glimpse of how toxic the compounds are and will enable later calculation of IC50 (dose at which 50% of the cells die as a result of toxicity from the compounds). In individual viability curves, include horizontal line at 50% to indicate rough IC50 concentration.
+
+
+``` {r echo = FALSE, include = FALSE}
+library(data.table)
+data <- data.table(normviability)
+
+# Establish library/data parameters for graphs
+library(data.table)
+data <- data.table(normviability)
+melted_data <- melt(data, id.vars=c('Concentration', 'DMSO'),
+     measure.vars = paste0('Compound.', c(1:11)),
+     na.rm = TRUE)
+
+melted_data[, Compound := gsub(pattern = "Compound.",
+                  replacement="",
+                  variable)]
+```
+
+```{r echo = FALSE, results='hide'}
+# Make graph with all Compounds (%Viability) vs. Concentration
+library(ggplot2)
+ggplot(data = melted_data,
+       aes(x = Concentration, y = value, group = Compound, colour = Compound)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  ylab('% Viability') +
+  xlab('Concentration (uM)') +
+  ggtitle("Viability Curves") +
+  theme(plot.title = element_text(lineheight = .8, face = "bold"))
+  scale_color_discrete("Compound")
+
+#Make graph with each individual Compound (% Viability) vs. Concentration
+ggplot(data = melted_data,
+       aes(x = Concentration, y = value)) +
+  geom_line() +
+  geom_point() +
+  ggtitle("Viability Curves") +
+  theme_minimal() +
+  theme(plot.title = element_text(lineheight = .8, face = "bold")) +
+  ylab('% Viability') +
+  xlab('Concentration (uM)') +
+  geom_hline(aes(yintercept = 50), colour = 'red') +
+  facet_wrap(~ Compound)
+```
+
+## Calculate IC50
+Extrapolate concentration based off of horizontal line drawn at 50% viability. An example calculation is shown for Compound 1, yielding an IC50 of approximately 1.15uM.
+
+```{r echo = FALSE, include = FALSE}
+library(drc)
+viabilityfit <- drm(value~Concentration, data = melted_data, fct = LL.4(names = c("slope", "low", "high", "ED50")), type = "continuous")
+summary(viabilityfit)
+```
+
+## Calculate Differentiation
+Determine which compounds cause differentiation of myeloblasts by calculating the percentage of cells double-positive for CD11b and GR-1 (two cell surface markers of mature myeloid cells) vs. concentration of each compound. Differentiation will be normalized to a positive control, which for our purposes, will be considered fully differentiated. In individual differentiation plots, a horizontal line at 50% will be used as a threshold for which compounds will be taken to re-testing and further validation studies.
+
+```{r echo=FALSE}
+# Open new csv file with differentiation data
+differentiation <- read.csv ("~/Desktop/R Final Project/R Test Differentiation 1.csv",
+                       header = TRUE, stringsAsFactors = TRUE)
+
+# Calculate average background (undifferentiated cells) by taking average of DMSO-treated wells
+DMSO_Average_Diff <- with(differentiation, sum(DMSO) /8)
+
+# Create new data table (differentiation_minusback) by subtracting average background from each well (excluding 'Concentration' wells)
+differentiation_minusback <- differentiation[2:12] - DMSO_Average_Diff
+
+# Create new data table (differentiation_normalized) by dividing differentiation_minusback by average of 'PosCon' wells and adjusting for percentage by multiplying by 100
+differentiation_poscon_average <- with(differentiation_minusback, sum(PosCon) /8)
+differentiation_normalized <- differentiation_minusback / differentiation_poscon_average * 100
+
+# Copy "Concentration" column from differentiation data table and append to differentiation_normalized data table
+differentiation_normalized$Concentration <- differentiation[, "Concentration..uM."]
+round(differentiation_normalized, digits = 2)
+
+# Remove "Concentration"" column from differentiation data table
+differentiation[, "Concentration..uM."] <- NULL
+```
+
+# Graph Differentiation
+Graph percent differentiation as a function of the positive control.
+
+``` {r echo = FALSE, results='hide'}
+library(data.table)
+datadiff <- data.table(differentiation_normalized)
+
+# Establish library/data parameters for graphs
+library(data.table)
+datadiff <- data.table(differentiation_normalized)
+
+melted_data <- melt(datadiff, id.vars = c('Concentration', 'PosCon'), 
+     measure.vars = paste0('Compound.', c(1:10)),
+     na.rm = TRUE)
+
+melted_data[, Compound := gsub(pattern = "Compound.",
+                  replacement="",
+                  variable)]
+
+# Make graph with all Compounds (%Differentiation) vs. Concentration
+ggplot(data = melted_data, 
+       aes(x = Concentration, y = value, group = Compound, colour = Compound)) + 
+geom_line() + 
+geom_point() + 
+theme_minimal() +
+ylab('% Differentiation') + 
+xlab ('Concentration (uM)') + 
+ggtitle("Differentiation") +
+theme(plot.title = element_text(lineheight = .8, face = "bold"))
+scale_color_discrete("Compound")
+
+#Make graph with each individual Compound (% Differentiation) vs. Concentration
+ggplot(data = melted_data,
+       aes(x = Concentration, y = value)) +
+  geom_line() +
+  geom_point() +
+  ggtitle("Differentiation")+
+  theme_minimal() +
+  theme(plot.title = element_text(lineheight = .8, face = "bold")) +
+  ylab('% Differentiation') +
+  xlab('Concentration (uM)') +
+  geom_hline(yintercept = 50, colour = "red") +
+  facet_wrap(~ Compound)
+
+```
+
+# Categorize Differentiated Cell Populations by Well
+Now that we know that some of our compounds are capable of undoing the differentiation arrest of immature myeloblasts, we'd like to categorize exactly what the terminally differentiated cells become based on cell surface markers. Each plate represents treatment with compounds of the same classification (in this example, cells are all treated with DHODH inhibitor, Brequinar). The cell-types will be characterized by the following: Basophil (CD203c), Eosinophil (IL-5Ra), Macrophage (F4/80), Neutrophil (Ly6C). This data will tell us which cell types are most associated with a particular type of compound treatment. 
+
+```{r echo=FALSE}
+# Open new csv file with cell-surface marker data
+characteristics <- read.csv ("~/Desktop/R Final Project/R Test Characteristics 1.csv",
+                      header = TRUE, stringsAsFactors = TRUE)
+
+# Sort table by most-represented cell population
+library(data.table)
+datachar <- data.table(characteristics)
+
+# Create new data frame excluding Well ID (giving average across plate)
+datachar2 <- datachar[, c (2:5)]
+
+# Boxplot of aggregate cell types resulting from compound treatment
+boxplot(datachar2, 
+        ylab = "Cell Count", 
+        xlab = "Cell Surface Markers",
+        col = c("red", "blue", "green", "purple"))
+```
+
+
